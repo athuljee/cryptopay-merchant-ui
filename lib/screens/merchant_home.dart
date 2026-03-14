@@ -3,7 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:http/http.dart' as http;
+import 'package:network_info_plus/network_info_plus.dart';
 import '../config/server_config.dart';
+import '../services/local_payment_server.dart';
 import 'payment_received.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -53,6 +55,10 @@ class _MerchantHomeState extends State<MerchantHome> {
 
   Map<String,double> rates = {};
   String lastUpdated = "";
+
+  bool offlineMode = false;
+  String? localIp;
+  bool _offlinePaymentShowing = false;
 
   Future<void> setupTTS() async {
     await tts.setLanguage("en-US");
@@ -110,8 +116,26 @@ class _MerchantHomeState extends State<MerchantHome> {
     super.initState();
     setupTTS();
     initMerchant();
-
     startWatching();
+    LocalPaymentServer.onPaymentReceived = _onOfflinePaymentReceived;
+  }
+
+  void _onOfflinePaymentReceived(Map<String, dynamic> tx) {
+    if (_offlinePaymentShowing || !mounted) return;
+    _offlinePaymentShowing = true;
+    final amount = (tx["amount"] as num?)?.toDouble() ?? 0.0;
+    final token = tx["token"] as String? ?? "ETH";
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => PaymentReceivedScreen(
+          crypto: token,
+          amount: amount,
+          fiat: fiat,
+        ),
+      ),
+    ).then((_) {
+      _offlinePaymentShowing = false;
+    });
   }
 
   void startWatching() {
@@ -203,29 +227,69 @@ class _MerchantHomeState extends State<MerchantHome> {
 
   }
 
+  Future<void> toggleOfflineMode(bool value) async {
+    setState(() => offlineMode = value);
+    if (value) {
+      final err = await LocalPaymentServer.start();
+      if (err != null) {
+        setState(() => offlineMode = false);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text("Could not start offline server: $err")),
+          );
+        }
+        return;
+      }
+      final info = NetworkInfo();
+      final ip = await info.getWifiIP();
+      setState(() => localIp = ip);
+    } else {
+      LocalPaymentServer.stop();
+      setState(() => localIp = null);
+      if (qrData != null) {
+        qrData = null;
+        cryptoAmount = null;
+      }
+    }
+  }
+
   Future<void> generateQR() async {
 
     if(amountController.text.isEmpty) return;
+
+    if (offlineMode && (localIp == null || localIp!.isEmpty)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Waiting for local IP. Connect to customer's hotspot first.")),
+      );
+      return;
+    }
 
     double fiatAmount = double.parse(amountController.text);
 
     double cryptoRate = rates[crypto] ?? 0;
 
-    if (cryptoRate == 0) {
+    if (cryptoRate == 0 && !offlineMode) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Fetching live crypto prices...")),
       );
       return;
     }
     double fiatRate = fiatRates[fiat]!;
+    if (cryptoRate == 0) cryptoRate = 1;
 
     cryptoAmount = (fiatAmount / fiatRate) / cryptoRate;
 
-    qrData = jsonEncode({
+    final payload = {
       "merchant": merchantUsername,
       "crypto": crypto,
       "amount": cryptoAmount
-    });
+    };
+    if (offlineMode && localIp != null && LocalPaymentServer.isRunning) {
+      payload["localIp"] = localIp;
+      payload["port"] = LocalPaymentServer.port ?? LocalPaymentServer.defaultPort;
+    }
+
+    qrData = jsonEncode(payload);
 
     setState(() {});
   }
@@ -233,6 +297,8 @@ class _MerchantHomeState extends State<MerchantHome> {
   @override
   void dispose() {
     watcher?.cancel();
+    if (offlineMode) LocalPaymentServer.stop();
+    LocalPaymentServer.onPaymentReceived = null;
     super.dispose();
   }
 
@@ -341,6 +407,23 @@ class _MerchantHomeState extends State<MerchantHome> {
                                     fontWeight:FontWeight.w600,
                                   ),
                                 ),
+
+                                Row(
+                                  children: [
+                                    const Text("Offline mode (customer hotspot)"),
+                                    const SizedBox(width: 8),
+                                    Switch(
+                                      value: offlineMode,
+                                      onChanged: toggleOfflineMode,
+                                    ),
+                                  ],
+                                ),
+                                if (offlineMode && localIp != null)
+                                  Text(
+                                    "Local: $localIp:${LocalPaymentServer.port ?? ""}",
+                                    style: const TextStyle(fontSize: 12, color: Colors.grey),
+                                  ),
+                                const SizedBox(height: 12),
 
                                 Row(
                                   mainAxisAlignment: MainAxisAlignment.spaceBetween,

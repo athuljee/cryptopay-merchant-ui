@@ -2,18 +2,10 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import '../config/server_config.dart';
-<<<<<<< HEAD
 import 'merchant_home.dart';
 import 'signup_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-=======
-import 'signup_screen.dart';
-import '../services/blockchain_service.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-
-
->>>>>>> f3a655a4b2e76f0d0f740cc4824154709b492ccd
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
@@ -32,7 +24,6 @@ class _LoginScreenState extends State<LoginScreen> {
 
     setState(() => loading = true);
 
-<<<<<<< HEAD
     try {
 
       final response = await http.post(
@@ -44,8 +35,6 @@ class _LoginScreenState extends State<LoginScreen> {
         }),
       );
 
-      print("Server response: ${response.body}");
-
       final data = jsonDecode(response.body);
 
       setState(() => loading = false);
@@ -55,6 +44,8 @@ class _LoginScreenState extends State<LoginScreen> {
         final prefs = await SharedPreferences.getInstance();
 
         await prefs.setString("user", usernameController.text);
+
+        if (!mounted) return;
 
         Navigator.pushReplacement(
           context,
@@ -75,40 +66,11 @@ class _LoginScreenState extends State<LoginScreen> {
 
       setState(() => loading = false);
 
-      print("Login error: $e");
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Server connection error")),
-=======
-    final response = await http.post(
-      Uri.parse("${ServerConfig.baseUrl}/login"),
-      headers: {"Content-Type": "application/json"},
-      body: jsonEncode({
-        "username": usernameController.text,
-        "password": passwordController.text
-      }),
-    );
-
-    final data = jsonDecode(response.body);
-
-    setState(() => loading = false);
-
-    if (data["success"] && data["role"] == "client") {
-      BlockchainService.clientAddress = usernameController.text;
-
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString("user", usernameController.text);
-      await prefs.setString("role", "client");
-
-      if (!mounted) return;
-
-      Navigator.pushReplacementNamed(context, '/home');
-    } else {
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Invalid client login")),
->>>>>>> f3a655a4b2e76f0d0f740cc4824154709b492ccd
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Server connection error")),
+        );
+      }
 
     }
 
@@ -118,11 +80,7 @@ class _LoginScreenState extends State<LoginScreen> {
   Widget build(BuildContext context) {
 
     return Scaffold(
-<<<<<<< HEAD
       appBar: AppBar(title: const Text("Merchant Login")),
-=======
-      appBar: AppBar(title: const Text("Client Login")),
->>>>>>> f3a655a4b2e76f0d0f740cc4824154709b492ccd
 
       body: Container(
         decoration: const BoxDecoration(
@@ -142,7 +100,6 @@ class _LoginScreenState extends State<LoginScreen> {
             child: Padding(
               padding: const EdgeInsets.all(24),
 
-<<<<<<< HEAD
               child: ConstrainedBox(
                 constraints: const BoxConstraints(
                   minWidth: 420,
@@ -229,88 +186,6 @@ class _LoginScreenState extends State<LoginScreen> {
 
                       ],
                     ),
-=======
-              child: Card(
-                elevation: 10,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(20),
-                ),
-
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-
-                      const SizedBox(height: 40),
-
-                      const Icon(
-                        Icons.account_balance_wallet,
-                        size: 80,
-                        color: Colors.teal,
-                      ),
-
-                      const SizedBox(height: 20),
-
-                      const Text(
-                        "Client Login",
-                        style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
-                      ),
-
-                      const SizedBox(height: 30),
-
-                      TextField(
-                        controller: usernameController,
-                        decoration: const InputDecoration(
-                          labelText: "Username",
-                          prefixIcon: Icon(Icons.person),
-                          border: OutlineInputBorder(),
-                        ),
-                      ),
-
-                      const SizedBox(height: 20),
-
-                      TextField(
-                        controller: passwordController,
-                        obscureText: true,
-                        decoration: const InputDecoration(
-                          labelText: "Password",
-                          prefixIcon: Icon(Icons.lock),
-                          border: OutlineInputBorder(),
-                        ),
-                      ),
-
-                      const SizedBox(height: 30),
-
-                      SizedBox(
-                        width: double.infinity,
-                        height: 50,
-                        child: ElevatedButton(
-
-                          onPressed: loading ? null : login,
-
-                          child: loading
-                              ? const CircularProgressIndicator(color: Colors.white)
-                              : const Text("Login"),
-
-                        ),
-                      ),
-
-                      TextButton(
-                        onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => const SignupScreen(role: "client"),
-                            ),
-                          );
-                        },
-                        child: const Text("Create new account"),
-                      ),
-
-                    ],
->>>>>>> f3a655a4b2e76f0d0f740cc4824154709b492ccd
                   ),
                 ),
               ),
