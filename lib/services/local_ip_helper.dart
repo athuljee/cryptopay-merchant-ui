@@ -8,7 +8,7 @@ import 'package:network_info_plus/network_info_plus.dart';
 Future<String?> getLocalIpAddress() async {
   // 1) NetworkInterface.list FIRST – works without internet; getWifiIP() often fails on hotspot-with-no-internet
   try {
-    final fromInterfaces = _getLocalIpFromInterfaces();
+    final fromInterfaces = await _getLocalIpFromInterfaces();
     if (fromInterfaces != null) return fromInterfaces;
   } catch (e, st) {
     debugPrint('getLocalIpAddress NetworkInterface (first): $e $st');
