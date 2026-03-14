@@ -263,17 +263,21 @@ class _MerchantHomeState extends State<MerchantHome> {
         }
         return;
       }
-      // Prefer WiFi IP, then fallback to any local IPv4 (works when connected to hotspot)
-      final ip = await getLocalIpAddress();
+      // Get IP: try now and again after short delay (adapter may not be ready immediately)
+      String? ip = await getLocalIpAddress();
+      if (ip == null && mounted) {
+        await Future.delayed(const Duration(milliseconds: 800));
+        ip = await getLocalIpAddress();
+      }
       if (mounted) {
         setState(() => localIp = ip);
         if (ip != null && ip.isNotEmpty) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("Offline mode ready. Connect to customer's hotspot if needed.")),
+            const SnackBar(content: Text("Offline mode ready. IP detected.")),
           );
         }
-        // Refresh IP periodically so when merchant connects to client hotspot, IP appears
-        _offlineIpRefreshTimer = Timer.periodic(const Duration(seconds: 3), (_) => _refreshOfflineIp());
+        // Refresh IP every 2s so when laptop connects to hotspot, IP appears quickly
+        _offlineIpRefreshTimer = Timer.periodic(const Duration(seconds: 2), (_) => _refreshOfflineIp());
       }
     } else {
       LocalPaymentServer.stop();
@@ -457,11 +461,31 @@ class _MerchantHomeState extends State<MerchantHome> {
                                   ],
                                 ),
                                 if (offlineMode)
-                                  Text(
-                                    localIp != null && localIp!.isNotEmpty
-                                        ? "Local: $localIp:${LocalPaymentServer.port ?? ""} (ready for offline payments)"
-                                        : "Detecting network... Connect to customer's hotspot.",
-                                    style: TextStyle(fontSize: 12, color: localIp != null ? Colors.green : Colors.orange),
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          localIp != null && localIp!.isNotEmpty
+                                              ? "Local: $localIp:${LocalPaymentServer.port ?? ""} (ready)"
+                                              : "Detecting network... Connect this laptop to the customer's phone hotspot.",
+                                          style: TextStyle(fontSize: 12, color: localIp != null ? Colors.green : Colors.orange),
+                                        ),
+                                      ),
+                                      TextButton.icon(
+                                        onPressed: () async {
+                                          setState(() => localIp = null);
+                                          final ip = await getLocalIpAddress();
+                                          if (mounted) setState(() => localIp = ip);
+                                          if (mounted && ip != null) {
+                                            ScaffoldMessenger.of(context).showSnackBar(
+                                              const SnackBar(content: Text("IP refreshed.")),
+                                            );
+                                          }
+                                        },
+                                        icon: const Icon(Icons.refresh, size: 18),
+                                        label: const Text("Refresh IP"),
+                                      ),
+                                    ],
                                   ),
                                 const SizedBox(height: 12),
 
