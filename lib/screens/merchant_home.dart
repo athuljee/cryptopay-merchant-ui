@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:http/http.dart' as http;
-import 'package:network_info_plus/network_info_plus.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import '../config/server_config.dart';
 import '../services/local_payment_server.dart';
 import '../services/local_ip_helper.dart';
@@ -61,6 +61,8 @@ class _MerchantHomeState extends State<MerchantHome> {
   String? localIp;
   bool _offlinePaymentShowing = false;
   Timer? _offlineIpRefreshTimer;
+  List<ConnectivityResult> _connectivity = [ConnectivityResult.none];
+  bool _clientHotspotReachable = false;
 
   Future<void> setupTTS() async {
     await tts.setLanguage("en-US");
@@ -120,6 +122,12 @@ class _MerchantHomeState extends State<MerchantHome> {
     initMerchant();
     startWatching();
     LocalPaymentServer.onPaymentReceived = _onOfflinePaymentReceived;
+    Connectivity().checkConnectivity().then((r) {
+      if (mounted) setState(() => _connectivity = r);
+    });
+    Connectivity().onConnectivityChanged.listen((r) {
+      if (mounted) setState(() => _connectivity = r);
+    });
   }
 
   void _onOfflinePaymentReceived(Map<String, dynamic> tx) {
@@ -229,23 +237,28 @@ class _MerchantHomeState extends State<MerchantHome> {
 
   }
 
+  static const int _clientPingPort = 8766;
+
   Future<void> _refreshOfflineIp() async {
     if (!offlineMode || !LocalPaymentServer.isRunning) return;
     final ip = await getLocalIpAddress();
     if (mounted && ip != null && ip != localIp) {
       setState(() => localIp = ip);
     }
-    // Notify client (hotspot host) that merchant is connected so client can show "Merchant connected"
-    if (ip != null) _pingClientHotspot();
+    final reached = await _pingClientHotspot(ip);
+    if (mounted) setState(() => _clientHotspotReachable = reached);
   }
 
-  Future<void> _pingClientHotspot() async {
+  /// Pings client hotspot (gateway:8766). Uses [localIp] to derive gateway if getWifiGatewayIP fails (e.g. no internet).
+  Future<bool> _pingClientHotspot(String? currentIp) async {
     try {
-      final info = NetworkInfo();
-      final gateway = await info.getWifiGatewayIP();
-      if (gateway == null || gateway.isEmpty) return;
-      await http.get(Uri.parse("http://$gateway:8766/ping")).timeout(const Duration(seconds: 2));
-    } catch (_) {}
+      final gateway = await getGatewayIpAddress(currentIp ?? localIp);
+      if (gateway == null || gateway.isEmpty) return false;
+      final res = await http.get(Uri.parse("http://$gateway:$_clientPingPort/ping")).timeout(const Duration(seconds: 2));
+      return res.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<void> toggleOfflineMode(bool value) async {
@@ -263,10 +276,11 @@ class _MerchantHomeState extends State<MerchantHome> {
         }
         return;
       }
-      // Get IP: try now and again after short delay (adapter may not be ready immediately)
+      // Get IP: retry with delays (adapter often not ready immediately when connecting to hotspot)
       String? ip = await getLocalIpAddress();
-      if (ip == null && mounted) {
-        await Future.delayed(const Duration(milliseconds: 800));
+      for (final delayMs in [400, 800, 1200]) {
+        if (ip != null) break;
+        await Future.delayed(Duration(milliseconds: delayMs));
         ip = await getLocalIpAddress();
       }
       if (mounted) {
@@ -281,12 +295,41 @@ class _MerchantHomeState extends State<MerchantHome> {
       }
     } else {
       LocalPaymentServer.stop();
-      setState(() => localIp = null);
+      setState(() {
+        localIp = null;
+        _clientHotspotReachable = false;
+      });
       if (qrData != null) {
         qrData = null;
         cryptoAmount = null;
       }
     }
+  }
+
+  Widget _buildConnectivityStatus() {
+    final hasWifi = _connectivity.any((c) => c == ConnectivityResult.wifi);
+    return Wrap(
+      spacing: 12,
+      runSpacing: 4,
+      children: [
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(hasWifi ? Icons.wifi : Icons.wifi_off, size: 14, color: hasWifi ? Colors.green : Colors.grey),
+            const SizedBox(width: 4),
+            Text("WLAN: ${hasWifi ? "Connected" : "None"}", style: TextStyle(fontSize: 11, color: hasWifi ? Colors.green : Colors.grey)),
+          ],
+        ),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(_clientHotspotReachable ? Icons.link : Icons.link_off, size: 14, color: _clientHotspotReachable ? Colors.green : Colors.orange),
+            const SizedBox(width: 4),
+            Text(_clientHotspotReachable ? "Customer hotspot: Connected" : "Customer hotspot: Not connected", style: TextStyle(fontSize: 11, color: _clientHotspotReachable ? Colors.green : Colors.orange)),
+          ],
+        ),
+      ],
+    );
   }
 
   Future<void> generateQR() async {
@@ -460,25 +503,39 @@ class _MerchantHomeState extends State<MerchantHome> {
                                     ),
                                   ],
                                 ),
-                                if (offlineMode)
+                                if (offlineMode) ...[
+                                  _buildConnectivityStatus(),
+                                  const SizedBox(height: 6),
                                   Row(
                                     children: [
                                       Expanded(
                                         child: Text(
                                           localIp != null && localIp!.isNotEmpty
                                               ? "Local: $localIp:${LocalPaymentServer.port ?? ""} (ready)"
-                                              : "Detecting network... Connect this laptop to the customer's phone hotspot.",
+                                              : "Detecting network... Connect this device to the customer's hotspot (no internet needed).",
                                           style: TextStyle(fontSize: 12, color: localIp != null ? Colors.green : Colors.orange),
                                         ),
                                       ),
                                       TextButton.icon(
                                         onPressed: () async {
                                           setState(() => localIp = null);
-                                          final ip = await getLocalIpAddress();
-                                          if (mounted) setState(() => localIp = ip);
-                                          if (mounted && ip != null) {
+                                          String? ip = await getLocalIpAddress();
+                                          for (final delayMs in [300, 600, 1000]) {
+                                            if (ip != null) break;
+                                            await Future.delayed(Duration(milliseconds: delayMs));
+                                            ip = await getLocalIpAddress();
+                                          }
+                                          if (mounted) {
+                                            setState(() => localIp = ip);
+                                            final reached = await _pingClientHotspot(ip);
+                                            if (mounted) setState(() => _clientHotspotReachable = reached);
+                                          }
+                                          if (mounted) {
                                             ScaffoldMessenger.of(context).showSnackBar(
-                                              const SnackBar(content: Text("IP refreshed.")),
+                                              SnackBar(
+                                                content: Text(ip != null ? "IP refreshed: $ip" : "Could not detect IP. Ensure you're connected to the customer's hotspot."),
+                                                duration: Duration(seconds: ip != null ? 2 : 4),
+                                              ),
                                             );
                                           }
                                         },
@@ -487,6 +544,7 @@ class _MerchantHomeState extends State<MerchantHome> {
                                       ),
                                     ],
                                   ),
+                                ],
                                 const SizedBox(height: 12),
 
                                 Row(
