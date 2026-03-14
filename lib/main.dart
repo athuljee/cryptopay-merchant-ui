@@ -1,13 +1,17 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'screens/login_screen.dart';
 import 'screens/merchant_home.dart';
 import 'screens/transaction_history.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'services/offline_sync_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  OfflineSyncService.startListening();
+  try {
+    OfflineSyncService.startListening();
+  } catch (e, st) {
+    debugPrint("OfflineSyncService.startListening: $e $st");
+  }
   runApp(const CryptoPayMerchantApp());
 }
 

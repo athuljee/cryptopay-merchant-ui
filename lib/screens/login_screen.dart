@@ -25,17 +25,37 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() => loading = true);
 
     try {
+      final response = await http
+          .post(
+            Uri.parse("${ServerConfig.baseUrl}/login"),
+            headers: {"Content-Type": "application/json"},
+            body: jsonEncode({
+              "username": usernameController.text,
+              "password": passwordController.text
+            }),
+          )
+          .timeout(const Duration(seconds: 15));
 
-      final response = await http.post(
-        Uri.parse("${ServerConfig.baseUrl}/login"),
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode({
-          "username": usernameController.text,
-          "password": passwordController.text
-        }),
-      );
+      if (response.statusCode != 200) {
+        setState(() => loading = false);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Server error. Try again or check internet.")),
+          );
+        }
+        return;
+      }
 
-      final data = jsonDecode(response.body);
+      final data = jsonDecode(response.body) as Map<String, dynamic>?;
+      if (data == null) {
+        setState(() => loading = false);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Invalid server response.")),
+          );
+        }
+        return;
+      }
 
       setState(() => loading = false);
 
@@ -63,15 +83,15 @@ class _LoginScreenState extends State<LoginScreen> {
       }
 
     } catch (e) {
-
       setState(() => loading = false);
-
       if (mounted) {
+        final msg = e.toString().contains('TimeoutException') || e.toString().contains('SocketException')
+            ? "No internet or server unreachable. Check connection."
+            : "Server connection error.";
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Server connection error")),
+          SnackBar(content: Text(msg)),
         );
       }
-
     }
 
   }

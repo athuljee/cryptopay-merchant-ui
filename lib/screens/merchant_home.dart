@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:http/http.dart' as http;
@@ -7,6 +8,7 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import '../config/server_config.dart';
 import '../services/local_payment_server.dart';
 import '../services/local_ip_helper.dart';
+import '../services/network_availability_service.dart';
 import 'payment_received.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -63,6 +65,8 @@ class _MerchantHomeState extends State<MerchantHome> {
   Timer? _offlineIpRefreshTimer;
   List<ConnectivityResult> _connectivity = [ConnectivityResult.none];
   bool _clientHotspotReachable = false;
+  bool _isOnline = false; // assume offline until proven; avoids API calls on startup when no internet
+  Timer? _internetCheckTimer;
 
   Future<void> setupTTS() async {
     await tts.setLanguage("en-US");
@@ -78,35 +82,37 @@ class _MerchantHomeState extends State<MerchantHome> {
 
 
   Future<void> fetchRates() async {
+    if (!_isOnline) return;
 
     try {
+      final res = await http
+          .get(
+            Uri.parse(
+                "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,tether&vs_currencies=inr"),
+          )
+          .timeout(const Duration(seconds: 10));
 
-      final res = await http.get(
-        Uri.parse(
-            "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,tether&vs_currencies=inr"
-        ),
-      );
+      if (res.statusCode != 200) return;
+      final data = jsonDecode(res.body) as Map<String, dynamic>?;
+      if (data == null) return;
+      final bitcoin = data["bitcoin"];
+      final ethereum = data["ethereum"];
+      final tether = data["tether"];
+      if (bitcoin == null || ethereum == null || tether == null) return;
 
-      final data = jsonDecode(res.body);
       final now = DateTime.now();
-
-      setState(() {
-
-        rates["BTC"] = (data["bitcoin"]["inr"]).toDouble();
-        rates["ETH"] = (data["ethereum"]["inr"]).toDouble();
-        rates["USDT"] = (data["tether"]["inr"]).toDouble();
-
-        lastUpdated =
-        "${now.hour.toString().padLeft(2,'0')}:${now.minute.toString().padLeft(2,'0')}";
-
-      });
-
+      if (mounted) {
+        setState(() {
+          rates["BTC"] = (bitcoin["inr"] as num).toDouble();
+          rates["ETH"] = (ethereum["inr"] as num).toDouble();
+          rates["USDT"] = (tether["inr"] as num).toDouble();
+          lastUpdated =
+              "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
+        });
+      }
     } catch (e) {
-
-      print("Price fetch error: $e");
-
+      if (kDebugMode) debugPrint("Price fetch error: $e");
     }
-
   }
 
   final Map<String,double> fiatRates = {
@@ -114,6 +120,11 @@ class _MerchantHomeState extends State<MerchantHome> {
     "USD":0.012,
     "EUR":0.011
   };
+
+  Future<void> _updateInternetStatus() async {
+    final online = await NetworkAvailabilityService.hasInternet();
+    if (mounted && _isOnline != online) setState(() => _isOnline = online);
+  }
 
   @override
   void initState()  {
@@ -128,6 +139,9 @@ class _MerchantHomeState extends State<MerchantHome> {
     Connectivity().onConnectivityChanged.listen((r) {
       if (mounted) setState(() => _connectivity = r);
     });
+    // Check actual internet (backend reachable); gate API calls on this
+    _updateInternetStatus();
+    _internetCheckTimer = Timer.periodic(const Duration(seconds: 25), (_) => _updateInternetStatus());
   }
 
   void _onOfflinePaymentReceived(Map<String, dynamic> tx) {
@@ -159,31 +173,29 @@ class _MerchantHomeState extends State<MerchantHome> {
 
   Future<void> checkPayment() async {
 
-    if(processingPayment) return;
+    if (processingPayment) return;
+    if (!_isOnline || offlineMode) return;
 
     try {
+      final res = await http
+          .get(
+            Uri.parse("${ServerConfig.baseUrl}/last-payment?time=${DateTime.now().millisecondsSinceEpoch}"),
+            headers: {
+              "Cache-Control": "no-cache",
+              "Pragma": "no-cache",
+            },
+          )
+          .timeout(const Duration(seconds: 8));
 
-      final res = await http.get(
-        Uri.parse("${ServerConfig.baseUrl}/last-payment?time=${DateTime.now().millisecondsSinceEpoch}"),
-        headers: {
-          "Cache-Control": "no-cache",
-          "Pragma": "no-cache",
-        },
-      );
-      print("SERVER RESPONSE: ${res.body}");
+      if (res.statusCode != 200) return;
 
-      if(res.statusCode != 200) return;
-
-      final data = jsonDecode(res.body);
-
-      if(data == null) return;
-
-      if(data["receiver"] != merchantUsername) return;
+      final data = jsonDecode(res.body) as Map<String, dynamic>?;
+      if (data == null || data["receiver"] != merchantUsername) return;
 
       processingPayment = true;
 
-      final amount = (data["amount"] as num).toDouble();
-      final token = data["token"];
+      final amount = (data["amount"] as num?)?.toDouble() ?? 0.0;
+      final token = data["token"] as String? ?? "ETH";
 
       await tts.speak("Payment received ${amount.toStringAsFixed(4)} $token");
 
@@ -200,9 +212,9 @@ class _MerchantHomeState extends State<MerchantHome> {
         ),
       );
 
-      await http.post(
-        Uri.parse("${ServerConfig.baseUrl}/clear-payment"),
-      );
+      await http
+          .post(Uri.parse("${ServerConfig.baseUrl}/clear-payment"))
+          .timeout(const Duration(seconds: 5));
 
       setState(() {
         qrData = null;
@@ -212,10 +224,8 @@ class _MerchantHomeState extends State<MerchantHome> {
 
       processingPayment = false;
 
-    } catch(e) {
-
-      print("Merchant error: $e");
-
+    } catch (e) {
+      if (kDebugMode) debugPrint("Merchant checkPayment: $e");
       processingPayment = false;
     }
 
@@ -237,28 +247,17 @@ class _MerchantHomeState extends State<MerchantHome> {
 
   }
 
-  static const int _clientPingPort = 8766;
-
+  /// Customer hotspot = we are on WLAN and have a local IP (same network as client; client can reach us via QR).
+  /// No internet or client ping required.
   Future<void> _refreshOfflineIp() async {
     if (!offlineMode || !LocalPaymentServer.isRunning) return;
     final ip = await getLocalIpAddress();
     if (mounted && ip != null && ip != localIp) {
       setState(() => localIp = ip);
     }
-    final reached = await _pingClientHotspot(ip);
-    if (mounted) setState(() => _clientHotspotReachable = reached);
-  }
-
-  /// Pings client hotspot (gateway:8766). Uses [localIp] to derive gateway if getWifiGatewayIP fails (e.g. no internet).
-  Future<bool> _pingClientHotspot(String? currentIp) async {
-    try {
-      final gateway = await getGatewayIpAddress(currentIp ?? localIp);
-      if (gateway == null || gateway.isEmpty) return false;
-      final res = await http.get(Uri.parse("http://$gateway:$_clientPingPort/ping")).timeout(const Duration(seconds: 2));
-      return res.statusCode == 200;
-    } catch (_) {
-      return false;
-    }
+    final hasWifi = _connectivity.any((c) => c == ConnectivityResult.wifi);
+    final onSameNetwork = hasWifi && (ip != null && ip.isNotEmpty);
+    if (mounted) setState(() => _clientHotspotReachable = onSameNetwork);
   }
 
   Future<void> toggleOfflineMode(bool value) async {
@@ -284,7 +283,11 @@ class _MerchantHomeState extends State<MerchantHome> {
         ip = await getLocalIpAddress();
       }
       if (mounted) {
-        setState(() => localIp = ip);
+        final hasWifi = _connectivity.any((c) => c == ConnectivityResult.wifi);
+        setState(() {
+          localIp = ip;
+          _clientHotspotReachable = hasWifi && (ip != null && ip.isNotEmpty);
+        });
         if (ip != null && ip.isNotEmpty) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text("Offline mode ready. IP detected.")),
@@ -326,6 +329,14 @@ class _MerchantHomeState extends State<MerchantHome> {
             Icon(_clientHotspotReachable ? Icons.link : Icons.link_off, size: 14, color: _clientHotspotReachable ? Colors.green : Colors.orange),
             const SizedBox(width: 4),
             Text(_clientHotspotReachable ? "Customer hotspot: Connected" : "Customer hotspot: Not connected", style: TextStyle(fontSize: 11, color: _clientHotspotReachable ? Colors.green : Colors.orange)),
+          ],
+        ),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(_isOnline ? Icons.cloud_done : Icons.cloud_off, size: 14, color: _isOnline ? Colors.green : Colors.orange),
+            const SizedBox(width: 4),
+            Text(_isOnline ? "Internet: Available" : "Internet: Offline", style: TextStyle(fontSize: 11, color: _isOnline ? Colors.green : Colors.orange)),
           ],
         ),
       ],
@@ -382,6 +393,7 @@ class _MerchantHomeState extends State<MerchantHome> {
   void dispose() {
     watcher?.cancel();
     _offlineIpRefreshTimer?.cancel();
+    _internetCheckTimer?.cancel();
     if (offlineMode) LocalPaymentServer.stop();
     LocalPaymentServer.onPaymentReceived = null;
     super.dispose();
@@ -526,9 +538,11 @@ class _MerchantHomeState extends State<MerchantHome> {
                                             ip = await getLocalIpAddress();
                                           }
                                           if (mounted) {
-                                            setState(() => localIp = ip);
-                                            final reached = await _pingClientHotspot(ip);
-                                            if (mounted) setState(() => _clientHotspotReachable = reached);
+                                            final hasWifi = _connectivity.any((c) => c == ConnectivityResult.wifi);
+                                            setState(() {
+                                              localIp = ip;
+                                              _clientHotspotReachable = hasWifi && (ip != null && ip.isNotEmpty);
+                                            });
                                           }
                                           if (mounted) {
                                             ScaffoldMessenger.of(context).showSnackBar(
