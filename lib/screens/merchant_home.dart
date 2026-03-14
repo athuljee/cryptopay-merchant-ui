@@ -263,8 +263,6 @@ class _MerchantHomeState extends State<MerchantHome> {
     }
 
     final hotspotReady = _hasLocalNetworkLink(ip) &&
-        ip != null &&
-        ip.isNotEmpty &&
         LocalPaymentServer.isRunning;
     if (mounted) setState(() => _clientHotspotReachable = hotspotReady);
   }
@@ -343,7 +341,7 @@ class _MerchantHomeState extends State<MerchantHome> {
             const SizedBox(width: 4),
             Text(
               _clientHotspotReachable
-                  ? "Customer hotspot: Connected"
+                  ? "Customer hotspot: Connected (offline-ready)"
                   : "Customer hotspot: Not connected",
               style: TextStyle(fontSize: 11, color: _clientHotspotReachable ? Colors.green : Colors.orange),
             ),
@@ -364,18 +362,6 @@ class _MerchantHomeState extends State<MerchantHome> {
   Future<void> generateQR() async {
 
     if(amountController.text.isEmpty) return;
-
-    if (offlineMode && (localIp == null || localIp!.isEmpty)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            "Detecting network... Connect this device to the customer's hotspot; IP will appear automatically.",
-          ),
-          duration: Duration(seconds: 4),
-        ),
-      );
-      return;
-    }
 
     double fiatAmount = double.parse(amountController.text);
 
@@ -400,11 +386,22 @@ class _MerchantHomeState extends State<MerchantHome> {
     if (offlineMode && localIp != null && LocalPaymentServer.isRunning) {
       payload["localIp"] = localIp;
       payload["port"] = LocalPaymentServer.port ?? LocalPaymentServer.defaultPort;
+    } else if (offlineMode) {
+      // Fallback: client can auto-discover merchant local server on same hotspot.
+      payload["port"] = LocalPaymentServer.port ?? LocalPaymentServer.defaultPort;
     }
 
     qrData = jsonEncode(payload);
 
     setState(() {});
+    if (offlineMode && (localIp == null || localIp!.isEmpty) && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("QR generated without IP. Client will auto-discover merchant on same hotspot."),
+          duration: Duration(seconds: 3),
+        ),
+      );
+    }
   }
 
   @override
@@ -542,7 +539,7 @@ class _MerchantHomeState extends State<MerchantHome> {
                                         child: Text(
                                           localIp != null && localIp!.isNotEmpty
                                               ? "Local: $localIp:${LocalPaymentServer.port ?? ""} (ready)"
-                                              : "Detecting network... Connect this device to the customer's hotspot (no internet needed).",
+                                              : "Hotspot mode active. IP not shown yet, but offline QR can still work on same network.",
                                           style: TextStyle(fontSize: 12, color: localIp != null ? Colors.green : Colors.orange),
                                         ),
                                       ),

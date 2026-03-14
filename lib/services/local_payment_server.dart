@@ -35,7 +35,13 @@ class LocalPaymentServer {
   }
 
   static void _handleRequest(HttpRequest request) {
-    if (request.method == "POST" && request.uri.path == "/receive-payment") {
+    if (request.method == "GET" && (request.uri.path == "/ping" || request.uri.path == "/ping/")) {
+      request.response
+        ..statusCode = HttpStatus.ok
+        ..headers.contentType = ContentType.json
+        ..write(jsonEncode({"ok": true, "service": "merchant-local-payment"}))
+        ..close();
+    } else if (request.method == "POST" && request.uri.path == "/receive-payment") {
       _handleReceivePayment(request);
     } else {
       request.response
