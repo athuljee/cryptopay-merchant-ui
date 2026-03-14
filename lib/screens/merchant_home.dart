@@ -63,9 +63,6 @@ class _MerchantHomeState extends State<MerchantHome> {
   Timer? _offlineIpRefreshTimer;
   List<ConnectivityResult> _connectivity = [ConnectivityResult.none];
   bool _clientHotspotReachable = false;
-  String? _clientHotspotIp;
-  DateTime? _lastHotspotSubnetScanAt;
-  bool _isDiscoveringClient = false;
   bool _isOnline = false; // assume offline until proven; avoids API calls on startup when no internet
   Timer? _internetCheckTimer;
 
@@ -258,125 +255,18 @@ class _MerchantHomeState extends State<MerchantHome> {
     return hasNetworkAdapter || (ip != null && ip.isNotEmpty);
   }
 
-  Future<bool> _pingClientAt(String ip) async {
-    try {
-      final res = await http
-          .get(Uri.parse("http://$ip:8766/ping"))
-          .timeout(const Duration(milliseconds: 700));
-      return res.statusCode == 200;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  String? _subnetPrefix(String ip) {
-    final parts = ip.split('.');
-    if (parts.length != 4) return null;
-    return "${parts[0]}.${parts[1]}.${parts[2]}";
-  }
-
-  Future<String?> _discoverClientOnSubnet(
-    String localIp, {
-    bool forceFullScan = false,
-  }) async {
-    final subnet = _subnetPrefix(localIp);
-    if (subnet == null) return null;
-    final myOctet = int.tryParse(localIp.split('.').last);
-    final priority = <String>[];
-
-    void addCandidate(String? ip) {
-      if (ip == null || ip.isEmpty) return;
-      if (!ip.startsWith("$subnet.")) return;
-      if (!priority.contains(ip)) priority.add(ip);
-    }
-
-    addCandidate(_clientHotspotIp);
-    addCandidate(await getGatewayIpAddress(localIp));
-    addCandidate("$subnet.1");
-    addCandidate("$subnet.2");
-    addCandidate("$subnet.10");
-    addCandidate("$subnet.100");
-    addCandidate("$subnet.101");
-    if (myOctet != null) {
-      for (int delta = 1; delta <= 20; delta++) {
-        final lower = myOctet - delta;
-        final higher = myOctet + delta;
-        if (lower >= 1) addCandidate("$subnet.$lower");
-        if (higher <= 254) addCandidate("$subnet.$higher");
-      }
-    }
-
-    for (final ip in priority) {
-      if (await _pingClientAt(ip)) return ip;
-    }
-
-    final now = DateTime.now();
-    final allowFullScan = forceFullScan ||
-        _lastHotspotSubnetScanAt == null ||
-        now.difference(_lastHotspotSubnetScanAt!) > const Duration(seconds: 12);
-    if (!allowFullScan) return null;
-    _lastHotspotSubnetScanAt = now;
-
-    final excluded = priority.toSet();
-    final candidates = <String>[];
-    for (int i = 1; i <= 254; i++) {
-      if (i == myOctet) continue;
-      final ip = "$subnet.$i";
-      if (excluded.contains(ip)) continue;
-      candidates.add(ip);
-    }
-
-    const batchSize = 24;
-    for (int i = 0; i < candidates.length; i += batchSize) {
-      final batch = candidates.skip(i).take(batchSize).toList();
-      final hits = await Future.wait(
-        batch.map((ip) async => await _pingClientAt(ip) ? ip : null),
-      );
-      for (final hit in hits) {
-        if (hit != null) return hit;
-      }
-    }
-    return null;
-  }
-
-  Future<void> _refreshOfflineIp({bool forceClientDiscovery = false}) async {
+  Future<void> _refreshOfflineIp() async {
     if (!offlineMode || !LocalPaymentServer.isRunning) return;
     final ip = await getLocalIpAddress();
     if (mounted && ip != localIp) {
       setState(() => localIp = ip);
     }
 
-    if (!_hasLocalNetworkLink(ip) || ip == null || ip.isEmpty) {
-      if (mounted) {
-        setState(() {
-          _clientHotspotReachable = false;
-          _clientHotspotIp = null;
-        });
-      }
-      return;
-    }
-
-    if (_clientHotspotIp != null && await _pingClientAt(_clientHotspotIp!)) {
-      if (mounted) setState(() => _clientHotspotReachable = true);
-      return;
-    }
-
-    if (_isDiscoveringClient) return;
-    _isDiscoveringClient = true;
-    try {
-      final foundIp = await _discoverClientOnSubnet(
-        ip,
-        forceFullScan: forceClientDiscovery,
-      );
-      if (mounted) {
-        setState(() {
-          _clientHotspotIp = foundIp;
-          _clientHotspotReachable = foundIp != null;
-        });
-      }
-    } finally {
-      _isDiscoveringClient = false;
-    }
+    final hotspotReady = _hasLocalNetworkLink(ip) &&
+        ip != null &&
+        ip.isNotEmpty &&
+        LocalPaymentServer.isRunning;
+    if (mounted) setState(() => _clientHotspotReachable = hotspotReady);
   }
 
   Future<void> toggleOfflineMode(bool value) async {
@@ -404,27 +294,26 @@ class _MerchantHomeState extends State<MerchantHome> {
       if (mounted) {
         setState(() {
           localIp = ip;
-          _clientHotspotReachable = false;
-          _clientHotspotIp = null;
+          _clientHotspotReachable =
+              _hasLocalNetworkLink(ip) && ip != null && ip.isNotEmpty;
         });
         if (ip != null && ip.isNotEmpty) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text("Offline mode ready. IP detected.")),
           );
         }
-        // Refresh IP/discovery periodically; full subnet scan is throttled internally.
+        // Refresh IP/network state periodically for hotspot readiness.
         _offlineIpRefreshTimer = Timer.periodic(
           const Duration(seconds: 3),
           (_) => _refreshOfflineIp(),
         );
       }
-      await _refreshOfflineIp(forceClientDiscovery: true);
+      await _refreshOfflineIp();
     } else {
       LocalPaymentServer.stop();
       setState(() {
         localIp = null;
         _clientHotspotReachable = false;
-        _clientHotspotIp = null;
       });
       if (qrData != null) {
         qrData = null;
@@ -454,7 +343,7 @@ class _MerchantHomeState extends State<MerchantHome> {
             const SizedBox(width: 4),
             Text(
               _clientHotspotReachable
-                  ? "Customer hotspot: Connected${_clientHotspotIp != null ? " ($_clientHotspotIp)" : ""}"
+                  ? "Customer hotspot: Connected"
                   : "Customer hotspot: Not connected",
               style: TextStyle(fontSize: 11, color: _clientHotspotReachable ? Colors.green : Colors.orange),
             ),
@@ -661,7 +550,6 @@ class _MerchantHomeState extends State<MerchantHome> {
                                         onPressed: () async {
                                           setState(() {
                                             localIp = null;
-                                            _clientHotspotIp = null;
                                             _clientHotspotReachable = false;
                                           });
                                           String? ip = await getLocalIpAddress();
@@ -673,7 +561,7 @@ class _MerchantHomeState extends State<MerchantHome> {
                                           if (mounted) {
                                             setState(() => localIp = ip);
                                           }
-                                          await _refreshOfflineIp(forceClientDiscovery: true);
+                                          await _refreshOfflineIp();
                                           if (mounted) {
                                             ScaffoldMessenger.of(context).showSnackBar(
                                               SnackBar(
@@ -681,8 +569,8 @@ class _MerchantHomeState extends State<MerchantHome> {
                                                   ip == null
                                                       ? "Could not detect IP. Ensure you're connected to the customer's hotspot."
                                                       : _clientHotspotReachable
-                                                          ? "Connected to customer hotspot (${_clientHotspotIp ?? "client found"})."
-                                                          : "IP refreshed: $ip. Client not detected yet; keep client app open and retry.",
+                                                          ? "Connected to customer hotspot. Ready for offline coins."
+                                                          : "IP refreshed: $ip. Still waiting for hotspot/local network.",
                                                 ),
                                                 duration: Duration(seconds: ip != null ? 2 : 4),
                                               ),
