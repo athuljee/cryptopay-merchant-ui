@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:network_info_plus/network_info_plus.dart';
 import '../config/server_config.dart';
 import '../services/local_payment_server.dart';
+import '../services/local_ip_helper.dart';
 import 'payment_received.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -59,6 +60,7 @@ class _MerchantHomeState extends State<MerchantHome> {
   bool offlineMode = false;
   String? localIp;
   bool _offlinePaymentShowing = false;
+  Timer? _offlineIpRefreshTimer;
 
   Future<void> setupTTS() async {
     await tts.setLanguage("en-US");
@@ -227,7 +229,28 @@ class _MerchantHomeState extends State<MerchantHome> {
 
   }
 
+  Future<void> _refreshOfflineIp() async {
+    if (!offlineMode || !LocalPaymentServer.isRunning) return;
+    final ip = await getLocalIpAddress();
+    if (mounted && ip != null && ip != localIp) {
+      setState(() => localIp = ip);
+    }
+    // Notify client (hotspot host) that merchant is connected so client can show "Merchant connected"
+    if (ip != null) _pingClientHotspot();
+  }
+
+  Future<void> _pingClientHotspot() async {
+    try {
+      final info = NetworkInfo();
+      final gateway = await info.getWifiGatewayIP();
+      if (gateway == null || gateway.isEmpty) return;
+      await http.get(Uri.parse("http://$gateway:8766/ping")).timeout(const Duration(seconds: 2));
+    } catch (_) {}
+  }
+
   Future<void> toggleOfflineMode(bool value) async {
+    _offlineIpRefreshTimer?.cancel();
+    _offlineIpRefreshTimer = null;
     setState(() => offlineMode = value);
     if (value) {
       final err = await LocalPaymentServer.start();
@@ -240,9 +263,18 @@ class _MerchantHomeState extends State<MerchantHome> {
         }
         return;
       }
-      final info = NetworkInfo();
-      final ip = await info.getWifiIP();
-      setState(() => localIp = ip);
+      // Prefer WiFi IP, then fallback to any local IPv4 (works when connected to hotspot)
+      final ip = await getLocalIpAddress();
+      if (mounted) {
+        setState(() => localIp = ip);
+        if (ip != null && ip.isNotEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Offline mode ready. Connect to customer's hotspot if needed.")),
+          );
+        }
+        // Refresh IP periodically so when merchant connects to client hotspot, IP appears
+        _offlineIpRefreshTimer = Timer.periodic(const Duration(seconds: 3), (_) => _refreshOfflineIp());
+      }
     } else {
       LocalPaymentServer.stop();
       setState(() => localIp = null);
@@ -259,7 +291,12 @@ class _MerchantHomeState extends State<MerchantHome> {
 
     if (offlineMode && (localIp == null || localIp!.isEmpty)) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Waiting for local IP. Connect to customer's hotspot first.")),
+        const SnackBar(
+          content: Text(
+            "Detecting network... Connect this device to the customer's hotspot; IP will appear automatically.",
+          ),
+          duration: Duration(seconds: 4),
+        ),
       );
       return;
     }
@@ -297,6 +334,7 @@ class _MerchantHomeState extends State<MerchantHome> {
   @override
   void dispose() {
     watcher?.cancel();
+    _offlineIpRefreshTimer?.cancel();
     if (offlineMode) LocalPaymentServer.stop();
     LocalPaymentServer.onPaymentReceived = null;
     super.dispose();
@@ -418,10 +456,12 @@ class _MerchantHomeState extends State<MerchantHome> {
                                     ),
                                   ],
                                 ),
-                                if (offlineMode && localIp != null)
+                                if (offlineMode)
                                   Text(
-                                    "Local: $localIp:${LocalPaymentServer.port ?? ""}",
-                                    style: const TextStyle(fontSize: 12, color: Colors.grey),
+                                    localIp != null && localIp!.isNotEmpty
+                                        ? "Local: $localIp:${LocalPaymentServer.port ?? ""} (ready for offline payments)"
+                                        : "Detecting network... Connect to customer's hotspot.",
+                                    style: TextStyle(fontSize: 12, color: localIp != null ? Colors.green : Colors.orange),
                                   ),
                                 const SizedBox(height: 12),
 

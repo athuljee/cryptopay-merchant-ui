@@ -1,16 +1,11 @@
 {
-<<<<<<< HEAD
     "name": "cryptopay_merchant",
     "short_name": "cryptopay_merchant",
-=======
-    "name": "cryptopay_client",
-    "short_name": "cryptopay_client",
->>>>>>> f3a655a4b2e76f0d0f740cc4824154709b492ccd
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "CryptoPay Merchant Terminal",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
