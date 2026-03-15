@@ -111,9 +111,10 @@ class _TransactionHistoryState extends State<TransactionHistory> {
     final isOffline = tx["is_offline_payment"] == true;
     if (!isOffline) return "Confirmed";
     final sync = (tx["sync_status"] ?? "pending").toString().toLowerCase();
-    if (sync == "synced") return "Synced (Confirmed)";
-    if (sync == "failed") return "Failed";
-    return "Pending Sync";
+    if (sync == "synced") return "Synced to Blockchain";
+    final status = (tx["status"] ?? "").toString().toLowerCase();
+    if (status == "rejected") return "Failed";
+    return "Pending";
   }
 
   Color _statusColor(Map<String, dynamic> tx) {
@@ -121,8 +122,9 @@ class _TransactionHistoryState extends State<TransactionHistory> {
     if (!isOffline) return const Color(0xFF22C55E); // green
     final sync = (tx["sync_status"] ?? "pending").toString().toLowerCase();
     if (sync == "synced") return const Color(0xFF3B82F6); // blue
-    if (sync == "failed") return const Color(0xFFEF4444); // red
-    return const Color(0xFFEAB308); // amber
+    final status = (tx["status"] ?? "").toString().toLowerCase();
+    if (status == "rejected") return const Color(0xFFEF4444); // red
+    return const Color(0xFFEAB308); // amber (Pending)
   }
 
   IconData _statusIcon(Map<String, dynamic> tx) {
@@ -130,7 +132,8 @@ class _TransactionHistoryState extends State<TransactionHistory> {
     if (!isOffline) return Icons.cloud_done;
     final sync = (tx["sync_status"] ?? "pending").toString().toLowerCase();
     if (sync == "synced") return Icons.sync;
-    if (sync == "failed") return Icons.error_outline;
+    final status = (tx["status"] ?? "").toString().toLowerCase();
+    if (status == "rejected") return Icons.error_outline;
     return Icons.schedule;
   }
 
@@ -311,7 +314,7 @@ class _TransactionHistoryState extends State<TransactionHistory> {
           transactions = txs;
           loading = false;
           _hasLoadedOnce = true;
-          errorMessage = txs.isEmpty ? "No transactions. Pull to refresh when online." : null;
+          errorMessage = txs.isEmpty ? "No transactions. Tap Reload when online." : null;
         });
       }
     }
@@ -323,10 +326,15 @@ class _TransactionHistoryState extends State<TransactionHistory> {
       appBar: AppBar(
         title: const Text("Transaction History"),
         elevation: 0,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            tooltip: "Reload",
+            onPressed: loading ? null : () => loadHistory(),
+          ),
+        ],
       ),
-      body: RefreshIndicator(
-        onRefresh: loadHistory,
-        child: loading
+      body: loading
             ? const Center(child: CircularProgressIndicator())
             : !_hasLoadedOnce && transactions.isEmpty
                 ? Center(
@@ -344,7 +352,7 @@ class _TransactionHistoryState extends State<TransactionHistory> {
                           ),
                           const SizedBox(height: 8),
                           Text(
-                            "Pull down to load transactions",
+                            "Tap Reload to load transactions",
                             textAlign: TextAlign.center,
                             style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
                           ),
@@ -362,6 +370,7 @@ class _TransactionHistoryState extends State<TransactionHistory> {
                     : transactions.isEmpty
                         ? const Center(child: Text("No transactions yet"))
                     : CustomScrollView(
+                        key: const PageStorageKey<String>("merchant_tx_list"),
                         slivers: [
                           SliverToBoxAdapter(
                             child: Padding(
@@ -371,7 +380,7 @@ class _TransactionHistoryState extends State<TransactionHistory> {
                                 runSpacing: 8,
                                 children: [
                                   _legendChip("Online", const Color(0xFF22C55E)),
-                                  _legendChip("Offline Pending", const Color(0xFFEAB308)),
+                                  _legendChip("Pending", const Color(0xFFEAB308)),
                                   _legendChip("Synced", const Color(0xFF3B82F6)),
                                   _legendChip("Failed", const Color(0xFFEF4444)),
                                 ],
