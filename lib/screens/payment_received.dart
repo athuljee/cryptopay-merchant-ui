@@ -85,15 +85,20 @@ class _PaymentReceivedScreenState extends State<PaymentReceivedScreen>
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 16),
-              Text(
-                widget.isOfflineMode
-                    ? "Amount: ${widget.amount} Coins"
-                    : "Amount: ${widget.amount} ${widget.crypto}",
-                style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.w600,
-                    ),
-              ),
               if (widget.isOfflineMode) ...[
+                Text(
+                  "Amount: ${widget.amount}",
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  "Crypto: ${widget.crypto}",
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                ),
                 const SizedBox(height: 8),
                 Text(
                   "From: ${widget.from ?? "Client Wallet"}",
@@ -101,7 +106,13 @@ class _PaymentReceivedScreenState extends State<PaymentReceivedScreen>
                         color: Colors.grey.shade700,
                       ),
                 ),
-              ],
+              ] else
+                Text(
+                  "Amount: ${widget.amount} ${widget.crypto}",
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                ),
               if (!widget.isOfflineMode) ...[
                 const SizedBox(height: 6),
                 Text(
