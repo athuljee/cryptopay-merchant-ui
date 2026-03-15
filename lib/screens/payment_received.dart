@@ -77,7 +77,7 @@ class _PaymentReceivedScreenState extends State<PaymentReceivedScreen>
               const SizedBox(height: 20),
               Text(
                 widget.isOfflineMode
-                    ? "Payment Received (Offline Mode)"
+                    ? "Offline Payment Received"
                     : "Payment Received",
                 style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                       fontWeight: FontWeight.bold,
@@ -86,7 +86,9 @@ class _PaymentReceivedScreenState extends State<PaymentReceivedScreen>
               ),
               const SizedBox(height: 16),
               Text(
-                "Amount: ${widget.amount} ${widget.crypto}",
+                widget.isOfflineMode
+                    ? "Amount: ${widget.amount} Coins"
+                    : "Amount: ${widget.amount} ${widget.crypto}",
                 style: Theme.of(context).textTheme.titleLarge?.copyWith(
                       fontWeight: FontWeight.w600,
                     ),
