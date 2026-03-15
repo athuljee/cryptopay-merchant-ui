@@ -114,6 +114,23 @@ class _MerchantHomeState extends State<MerchantHome> {
       }
     } catch (e) {
       if (kDebugMode) debugPrint("Price fetch error: $e");
+      if (mounted) setState(() {});
+    }
+  }
+
+  /// Manual refresh: re-check internet and fetch rates. Stays on current page.
+  Future<void> _onRefresh() async {
+    await _updateInternetStatus();
+    await fetchRates();
+    if (!mounted) return;
+    setState(() {});
+    if (!_isOnline || rates.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Live rates unavailable. Working in offline mode."),
+          duration: Duration(seconds: 3),
+        ),
+      );
     }
   }
 
@@ -398,7 +415,7 @@ class _MerchantHomeState extends State<MerchantHome> {
 
     double cryptoRate = rates[crypto] ?? 0;
 
-    if (cryptoRate == 0 && !offlineMode) {
+    if (cryptoRate == 0 && _isOnline && !offlineMode) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Fetching live crypto prices...")),
       );
@@ -506,6 +523,12 @@ class _MerchantHomeState extends State<MerchantHome> {
                           const SizedBox(width: 12),
 
                           IconButton(
+                            icon: const Icon(Icons.refresh),
+                            tooltip: "Refresh (rates & data)",
+                            onPressed: () => _onRefresh(),
+                          ),
+
+                          IconButton(
                             icon: const Icon(Icons.history),
                             tooltip: "Transaction History",
                             onPressed: () {
@@ -532,6 +555,28 @@ class _MerchantHomeState extends State<MerchantHome> {
 
                   const SizedBox(height:20),
                   const Divider(),
+                  if (!_isOnline)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: Material(
+                        color: Colors.amber.shade100,
+                        borderRadius: BorderRadius.circular(8),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          child: Row(
+                            children: const [
+                              Icon(Icons.cloud_off, color: Colors.amber, size: 20),
+                              SizedBox(width: 8),
+                              Text(
+                                "Live rates unavailable. Working in offline mode.",
+                                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  if (!_isOnline) const SizedBox(height: 8),
                   const SizedBox(height:20),
 
                   Expanded(
