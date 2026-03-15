@@ -154,12 +154,15 @@ class _MerchantHomeState extends State<MerchantHome> {
     _offlinePaymentShowing = true;
     final amount = (tx["amount"] as num?)?.toDouble() ?? 0.0;
     final token = tx["token"] as String? ?? "ETH";
+    final from = tx["from_user_id"] ?? tx["from"] ?? "Client Wallet";
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => PaymentReceivedScreen(
           crypto: token,
           amount: amount,
           fiat: fiat,
+          isOfflineMode: true,
+          from: from?.toString(),
         ),
       ),
     ).then((_) {

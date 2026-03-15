@@ -4,12 +4,18 @@ class PaymentReceivedScreen extends StatefulWidget {
   final String crypto;
   final double amount;
   final String fiat;
+  /// When true, shows "Payment Received (Offline Mode)" with From: sender.
+  final bool isOfflineMode;
+  /// For offline mode: who sent the payment (e.g. "Client Wallet").
+  final String? from;
 
   const PaymentReceivedScreen({
     super.key,
     required this.crypto,
     required this.amount,
     required this.fiat,
+    this.isOfflineMode = false,
+    this.from,
   });
 
   @override
@@ -70,26 +76,40 @@ class _PaymentReceivedScreenState extends State<PaymentReceivedScreen>
               ),
               const SizedBox(height: 20),
               Text(
-                "Payment Received",
+                widget.isOfflineMode
+                    ? "Payment Received (Offline Mode)"
+                    : "Payment Received",
                 style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                       fontWeight: FontWeight.bold,
                     ),
+                textAlign: TextAlign.center,
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 16),
               Text(
-                "${widget.amount} ${widget.crypto}",
+                "Amount: ${widget.amount} ${widget.crypto}",
                 style: Theme.of(context).textTheme.titleLarge?.copyWith(
                       fontWeight: FontWeight.w600,
                     ),
               ),
-              const SizedBox(height: 6),
-              Text(
-                "Paid in ${widget.fiat}",
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Colors.grey.shade600,
+              if (widget.isOfflineMode) ...[
+                const SizedBox(height: 8),
+                Text(
+                  "From: ${widget.from ?? "Client Wallet"}",
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: Colors.grey.shade700,
+                      ),
                 ),
-              ),
+              ],
+              if (!widget.isOfflineMode) ...[
+                const SizedBox(height: 6),
+                Text(
+                  "Paid in ${widget.fiat}",
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Colors.grey.shade600,
+                  ),
+                ),
+              ],
               const SizedBox(height: 30),
               ElevatedButton(
                 onPressed: () => Navigator.pop(context),
