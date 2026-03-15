@@ -5,25 +5,51 @@ import 'package:http/http.dart' as http;
 import '../config/server_config.dart';
 import 'local_storage.dart';
 import 'network_availability_service.dart';
+import 'offline_server_service.dart';
 
 /// Syncs pending offline transactions to the blockchain when internet (backend) is reachable.
+/// Runs every 30 seconds when online; also reacts to connectivity changes.
 class OfflineSyncService {
   static StreamSubscription<List<ConnectivityResult>>? _subscription;
+  static Timer? _periodicSyncTimer;
   static bool _isSyncing = false;
+
+  static const Duration syncInterval = Duration(seconds: 30);
 
   static void startListening() {
     _subscription?.cancel();
     _subscription = Connectivity().onConnectivityChanged.listen((_) async {
       if (await NetworkAvailabilityService.hasInternet()) {
         syncPendingTransactions();
+        triggerOfflineServerSync();
       }
     });
+    // Initial sync and trigger offline server sync
     syncPendingTransactions();
+    triggerOfflineServerSync();
+    // Every 30s: check internet and sync (merchant local pending + offline server sync)
+    _periodicSyncTimer?.cancel();
+    _periodicSyncTimer = Timer.periodic(syncInterval, (_) async {
+      if (await NetworkAvailabilityService.hasInternet()) {
+        syncPendingTransactions();
+        triggerOfflineServerSync();
+      }
+    });
   }
 
   static void stopListening() {
     _subscription?.cancel();
     _subscription = null;
+    _periodicSyncTimer?.cancel();
+    _periodicSyncTimer = null;
+  }
+
+  /// Ask the local offline server (port 3001) to sync its pending transactions to the main backend.
+  static Future<void> triggerOfflineServerSync() async {
+    if (!await NetworkAvailabilityService.hasInternet()) return;
+    try {
+      await MerchantOfflineServerService.syncNow();
+    } catch (_) {}
   }
 
   static Future<void> syncPendingTransactions() async {

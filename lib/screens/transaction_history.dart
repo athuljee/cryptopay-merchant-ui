@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config/server_config.dart';
@@ -33,12 +34,19 @@ class _TransactionHistoryState extends State<TransactionHistory> {
     return DateTime.tryParse(s);
   }
 
-  String _fmt(DateTime? dt) {
+  /// Time only, e.g. 12:05 PM
+  String _fmtTime(DateTime? dt) {
     if (dt == null) return "-";
     final h = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
     final m = dt.minute.toString().padLeft(2, "0");
     final ap = dt.hour >= 12 ? "PM" : "AM";
     return "$h:$m $ap";
+  }
+
+  /// Date only, e.g. 2026-03-15
+  String _fmtDate(DateTime? dt) {
+    if (dt == null) return "-";
+    return "${dt.year}-${dt.month.toString().padLeft(2, "0")}-${dt.day.toString().padLeft(2, "0")}";
   }
 
   Map<String, dynamic> _normalizeOnline(Map<String, dynamic> tx) {
@@ -85,22 +93,107 @@ class _TransactionHistoryState extends State<TransactionHistory> {
     return 0;
   }
 
-  String _label(Map<String, dynamic> tx) {
+  String _modeLabel(Map<String, dynamic> tx) {
     final isOffline = tx["is_offline_payment"] == true;
-    if (!isOffline) return "Online Payment";
-    final sync = (tx["sync_status"] ?? "pending").toString().toLowerCase();
-    if (sync == "synced") return "Offline Payment (Synced)";
-    if (sync == "failed") return "Offline Payment (Failed)";
-    return "Offline Payment (Pending Sync)";
+    return isOffline ? "Offline Payment" : "Online Payment";
   }
 
-  Color _badgeColor(Map<String, dynamic> tx) {
+  String _statusLabel(Map<String, dynamic> tx) {
     final isOffline = tx["is_offline_payment"] == true;
-    if (!isOffline) return Colors.green;
+    if (!isOffline) return "Online";
     final sync = (tx["sync_status"] ?? "pending").toString().toLowerCase();
-    if (sync == "synced") return Colors.blue;
-    if (sync == "failed") return Colors.redAccent;
-    return Colors.orange;
+    if (sync == "synced") return "Synced to Blockchain";
+    if (sync == "failed") return "Failed";
+    return "Pending Sync";
+  }
+
+  Color _statusColor(Map<String, dynamic> tx) {
+    final isOffline = tx["is_offline_payment"] == true;
+    if (!isOffline) return const Color(0xFF22C55E); // green
+    final sync = (tx["sync_status"] ?? "pending").toString().toLowerCase();
+    if (sync == "synced") return const Color(0xFF3B82F6); // blue
+    if (sync == "failed") return const Color(0xFFEF4444); // red
+    return const Color(0xFFEAB308); // amber
+  }
+
+  IconData _statusIcon(Map<String, dynamic> tx) {
+    final isOffline = tx["is_offline_payment"] == true;
+    if (!isOffline) return Icons.cloud_done;
+    final sync = (tx["sync_status"] ?? "pending").toString().toLowerCase();
+    if (sync == "synced") return Icons.sync;
+    if (sync == "failed") return Icons.error_outline;
+    return Icons.schedule;
+  }
+
+  void _showTransactionDetails(Map<String, dynamic> tx) {
+    final createdAt = _parseDate(tx["offline_created_at"]) ?? _parseDate(tx["created_at"]);
+    final receivedAt = _parseDate(tx["offline_received_at"]);
+    final syncedAt = _parseDate(tx["blockchain_synced_at"]);
+    final txId = (tx["tx_id"] ?? tx["txId"] ?? "").toString();
+
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 420),
+          padding: const EdgeInsets.all(24),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text("Transaction Details", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.of(ctx).pop(),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                _detailRow("Amount", "${tx['amount']} ${tx['token'] ?? 'ETH'}"),
+                _detailRow("From", "${tx['sender'] ?? '-'}"),
+                _detailRow("To", "${tx['receiver'] ?? '-'}"),
+                _detailRow("Mode", _modeLabel(tx)),
+                if (txId.isNotEmpty) _detailRow("Transaction ID", txId),
+                const Divider(height: 24),
+                _detailRow("Created Offline", _fmtTime(createdAt)),
+                _detailRow("Merchant Received", _fmtTime(receivedAt ?? createdAt)),
+                _detailRow("Synced to Blockchain", _fmtTime(syncedAt)),
+                _detailRow("Status", _statusLabel(tx)),
+                if (txId.isNotEmpty) ...[
+                  const SizedBox(height: 16),
+                  OutlinedButton.icon(
+                    onPressed: () {
+                      Clipboard.setData(ClipboardData(text: txId));
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Transaction ID copied")));
+                    },
+                    icon: const Icon(Icons.copy, size: 18),
+                    label: const Text("Copy Transaction ID"),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _detailRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(width: 140, child: Text(label, style: const TextStyle(color: Colors.grey, fontSize: 13))),
+          Expanded(child: Text(value, style: const TextStyle(fontWeight: FontWeight.w500))),
+        ],
+      ),
+    );
   }
 
   Future<void> loadHistory() async {
@@ -192,80 +285,154 @@ class _TransactionHistoryState extends State<TransactionHistory> {
 
   @override
   Widget build(BuildContext context) {
-
     return Scaffold(
-      appBar: AppBar(title: const Text("Transaction History")),
-
+      appBar: AppBar(
+        title: const Text("Transaction History"),
+        elevation: 0,
+      ),
       body: RefreshIndicator(
-
         onRefresh: loadHistory,
-
         child: loading
             ? const Center(child: CircularProgressIndicator())
             : errorMessage != null && transactions.isEmpty
-            ? Center(child: Text(errorMessage!, textAlign: TextAlign.center))
-            : transactions.isEmpty
-            ? const Center(child: Text("No transactions yet"))
-            : ListView.builder(
-          itemCount: transactions.length,
-          itemBuilder: (context, index) {
-            final tx = transactions[index];
-            final badgeColor = _badgeColor(tx);
-            final createdAt = _parseDate(tx["offline_created_at"]) ?? _parseDate(tx["created_at"]);
-            final receivedAt = _parseDate(tx["offline_received_at"]);
-            final syncedAt = _parseDate(tx["blockchain_synced_at"]);
-
-            return Card(
-              margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text(
-                          "Merchant Payment Received",
-                          style: TextStyle(fontWeight: FontWeight.w700),
-                        ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: badgeColor.withOpacity(0.12),
-                            borderRadius: BorderRadius.circular(999),
-                          ),
-                          child: Text(
-                            _label(tx),
-                            style: TextStyle(
-                              color: badgeColor,
-                              fontWeight: FontWeight.w600,
-                              fontSize: 11,
+                ? Center(child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Text(errorMessage!, textAlign: TextAlign.center, style: const TextStyle(fontSize: 15)),
+                  ))
+                : transactions.isEmpty
+                    ? const Center(child: Text("No transactions yet"))
+                    : CustomScrollView(
+                        slivers: [
+                          SliverToBoxAdapter(
+                            child: Padding(
+                              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                              child: Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: [
+                                  _legendChip("Online", const Color(0xFF22C55E)),
+                                  _legendChip("Offline Pending", const Color(0xFFEAB308)),
+                                  _legendChip("Synced", const Color(0xFF3B82F6)),
+                                  _legendChip("Failed", const Color(0xFFEF4444)),
+                                ],
+                              ),
                             ),
                           ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Text("Amount: ${tx['amount']} ${tx['token']}"),
-                    Text("From: ${tx['sender']}  To: ${tx['receiver']}"),
-                    const SizedBox(height: 8),
-                    Text("Created (Offline): ${_fmt(createdAt)}", style: const TextStyle(fontSize: 12)),
-                    Text("Merchant Received: ${_fmt(receivedAt ?? createdAt)}", style: const TextStyle(fontSize: 12)),
-                    Text("Synced to Blockchain: ${_fmt(syncedAt)}", style: const TextStyle(fontSize: 12)),
-                    if ((tx["tx_id"] ?? "").toString().isNotEmpty)
-                      Text("tx_id: ${tx["tx_id"]}", style: const TextStyle(fontSize: 11, color: Colors.grey)),
-                  ],
-                ),
-              ),
-            );
-          },
-        ),
-
+                          SliverList(
+                            delegate: SliverChildBuilderDelegate(
+                              (context, index) {
+                                final tx = transactions[index];
+                                final statusColor = _statusColor(tx);
+                                final createdAt = _parseDate(tx["offline_created_at"]) ?? _parseDate(tx["created_at"]);
+                                return Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                                  child: Material(
+                                    color: Colors.transparent,
+                                    child: InkWell(
+                                      onTap: () => _showTransactionDetails(tx),
+                                      borderRadius: BorderRadius.circular(16),
+                                      child: Container(
+                                        padding: const EdgeInsets.all(16),
+                                        decoration: BoxDecoration(
+                                          color: Theme.of(context).cardColor,
+                                          borderRadius: BorderRadius.circular(16),
+                                          boxShadow: [
+                                            BoxShadow(
+                                              color: Colors.black.withOpacity(0.04),
+                                              blurRadius: 8,
+                                              offset: const Offset(0, 2),
+                                            ),
+                                          ],
+                                        ),
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Row(
+                                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                              children: [
+                                                Text(
+                                                  "Payment Received",
+                                                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                                        fontWeight: FontWeight.w700,
+                                                      ),
+                                                ),
+                                                Container(
+                                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                                                  decoration: BoxDecoration(
+                                                    color: statusColor.withOpacity(0.12),
+                                                    borderRadius: BorderRadius.circular(999),
+                                                  ),
+                                                  child: Row(
+                                                    mainAxisSize: MainAxisSize.min,
+                                                    children: [
+                                                      Icon(_statusIcon(tx), size: 14, color: statusColor),
+                                                      const SizedBox(width: 4),
+                                                      Text(
+                                                        _statusLabel(tx),
+                                                        style: TextStyle(
+                                                          color: statusColor,
+                                                          fontWeight: FontWeight.w600,
+                                                          fontSize: 12,
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                            const SizedBox(height: 12),
+                                            Text(
+                                              "${tx['amount']} ${tx['token'] ?? 'ETH'}",
+                                              style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
+                                            ),
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              "From: ${tx['sender'] ?? '—'}",
+                                              style: TextStyle(
+                                                fontSize: 13,
+                                                color: Colors.grey.shade700,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 12),
+                                            Row(
+                                              children: [
+                                                Icon(Icons.payment, size: 14, color: Colors.grey.shade600),
+                                                const SizedBox(width: 6),
+                                                Text(_modeLabel(tx), style: TextStyle(fontSize: 12, color: Colors.grey.shade700)),
+                                                const SizedBox(width: 16),
+                                                Icon(Icons.calendar_today, size: 14, color: Colors.grey.shade600),
+                                                const SizedBox(width: 6),
+                                                Text(_fmtDate(createdAt), style: TextStyle(fontSize: 12, color: Colors.grey.shade700)),
+                                                const SizedBox(width: 12),
+                                                Text(_fmtTime(createdAt), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500)),
+                                              ],
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
+                              childCount: transactions.length,
+                            ),
+                          ),
+                        ],
+                      ),
       ),
-
     );
+  }
 
+  Widget _legendChip(String label, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: color)),
+    );
   }
 }
