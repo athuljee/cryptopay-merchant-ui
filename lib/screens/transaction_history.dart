@@ -17,14 +17,23 @@ class TransactionHistory extends StatefulWidget {
 
 class _TransactionHistoryState extends State<TransactionHistory> {
   List<Map<String, dynamic>> transactions = [];
-  bool loading = true;
+  /// Do not auto-load on startup; only load when user opens history and refreshes.
+  bool loading = false;
   String? errorMessage;
   String merchantUsername = "";
+  bool _hasLoadedOnce = false;
 
   @override
   void initState() {
     super.initState();
-    loadHistory();
+    _loadMerchantUsername();
+  }
+
+  Future<void> _loadMerchantUsername() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() => merchantUsername = prefs.getString("user") ?? "");
+    }
   }
 
   DateTime? _parseDate(dynamic value) {
@@ -267,6 +276,7 @@ class _TransactionHistoryState extends State<TransactionHistory> {
       if (mounted) setState(() {
         transactions = txs;
         loading = false;
+        _hasLoadedOnce = true;
         errorMessage = txs.isEmpty ? "No transactions yet." : null;
       });
     } catch (e) {
@@ -277,6 +287,7 @@ class _TransactionHistoryState extends State<TransactionHistory> {
         setState(() {
           transactions = txs;
           loading = false;
+          _hasLoadedOnce = true;
           errorMessage = txs.isEmpty ? "No internet. No local transactions available." : "No internet. Showing offline transactions.";
         });
       }
@@ -294,13 +305,39 @@ class _TransactionHistoryState extends State<TransactionHistory> {
         onRefresh: loadHistory,
         child: loading
             ? const Center(child: CircularProgressIndicator())
-            : errorMessage != null && transactions.isEmpty
-                ? Center(child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Text(errorMessage!, textAlign: TextAlign.center, style: const TextStyle(fontSize: 15)),
-                  ))
-                : transactions.isEmpty
-                    ? const Center(child: Text("No transactions yet"))
+            : !_hasLoadedOnce && transactions.isEmpty
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.history, size: 48, color: Colors.grey.shade400),
+                          const SizedBox(height: 16),
+                          Text(
+                            "Transaction history is not loaded on startup.",
+                            textAlign: TextAlign.center,
+                            style: TextStyle(fontSize: 15, color: Colors.grey.shade700),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            "Pull down to load transactions",
+                            textAlign: TextAlign.center,
+                            style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                : errorMessage != null && transactions.isEmpty
+                    ? Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: Text(errorMessage!, textAlign: TextAlign.center, style: const TextStyle(fontSize: 15)),
+                        ),
+                      )
+                    : transactions.isEmpty
+                        ? const Center(child: Text("No transactions yet"))
                     : CustomScrollView(
                         slivers: [
                           SliverToBoxAdapter(

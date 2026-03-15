@@ -12,6 +12,7 @@ import 'payment_received.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'login_screen.dart';
+import 'transaction_history.dart';
 
 
 
@@ -502,7 +503,20 @@ class _MerchantHomeState extends State<MerchantHome> {
                             ),
                           ),
 
-                          const SizedBox(width: 20),
+                          const SizedBox(width: 12),
+
+                          IconButton(
+                            icon: const Icon(Icons.history),
+                            tooltip: "Transaction History",
+                            onPressed: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(builder: (_) => const TransactionHistory()),
+                              );
+                            },
+                          ),
+
+                          const SizedBox(width: 8),
 
                           IconButton(
                             icon: const Icon(Icons.logout),
