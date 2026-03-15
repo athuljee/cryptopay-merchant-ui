@@ -6,9 +6,8 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'package:connectivity_plus/connectivity_plus.dart';
 import '../config/server_config.dart';
-import '../services/local_payment_server.dart';
-import '../services/local_ip_helper.dart';
 import '../services/network_availability_service.dart';
+import '../services/offline_server_service.dart';
 import 'payment_received.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -58,13 +57,17 @@ class _MerchantHomeState extends State<MerchantHome> {
   String lastUpdated = "";
 
   bool offlineMode = false;
-  String? localIp;
   bool _offlinePaymentShowing = false;
-  Timer? _offlineIpRefreshTimer;
   List<ConnectivityResult> _connectivity = [ConnectivityResult.none];
   bool _clientHotspotReachable = false;
   bool _isOnline = false; // assume offline until proven; avoids API calls on startup when no internet
   Timer? _internetCheckTimer;
+  Timer? _offlineServerPollTimer;
+  bool _offlineServerHealthy = false;
+  int _offlineTxCount = 0;
+  Map<String, dynamic>? _offlineWallet;
+  final Set<String> _seenOfflineTxIds = <String>{};
+  DateTime? _lastOfflineSyncAt;
 
   Future<void> setupTTS() async {
     await tts.setLanguage("en-US");
@@ -80,7 +83,7 @@ class _MerchantHomeState extends State<MerchantHome> {
 
 
   Future<void> fetchRates() async {
-    if (!_isOnline) return;
+    if (!_isOnline || offlineMode) return;
 
     try {
       final res = await http
@@ -130,14 +133,15 @@ class _MerchantHomeState extends State<MerchantHome> {
     setupTTS();
     initMerchant();
     startWatching();
-    LocalPaymentServer.onPaymentReceived = _onOfflinePaymentReceived;
     Connectivity().checkConnectivity().then((r) {
       if (mounted) setState(() => _connectivity = r);
     });
     Connectivity().onConnectivityChanged.listen((r) {
-      if (mounted) setState(() => _connectivity = r);
-      if (offlineMode) {
-        _refreshOfflineIp();
+      if (mounted) {
+        setState(() {
+          _connectivity = r;
+          _clientHotspotReachable = offlineMode && _hasLocalNetworkLink();
+        });
       }
     });
     // Check actual internet (backend reachable); gate API calls on this
@@ -248,69 +252,78 @@ class _MerchantHomeState extends State<MerchantHome> {
 
   }
 
-  bool _hasLocalNetworkLink(String? ip) {
+  bool _hasLocalNetworkLink() {
     final hasNetworkAdapter = _connectivity.any(
       (c) => c == ConnectivityResult.wifi || c == ConnectivityResult.ethernet,
     );
-    return hasNetworkAdapter || (ip != null && ip.isNotEmpty);
+    return hasNetworkAdapter;
   }
 
-  Future<void> _refreshOfflineIp() async {
-    if (!offlineMode || !LocalPaymentServer.isRunning) return;
-    final ip = await getLocalIpAddress();
-    if (mounted && ip != localIp) {
-      setState(() => localIp = ip);
+  void _startOfflineServerPolling() {
+    _offlineServerPollTimer?.cancel();
+    _refreshOfflineServerData();
+    _offlineServerPollTimer = Timer.periodic(
+      const Duration(seconds: 3),
+      (_) => _refreshOfflineServerData(),
+    );
+  }
+
+  void _stopOfflineServerPolling() {
+    _offlineServerPollTimer?.cancel();
+    _offlineServerPollTimer = null;
+    if (mounted) {
+      setState(() {
+        _offlineServerHealthy = false;
+        _offlineTxCount = 0;
+        _offlineWallet = null;
+      });
+    }
+  }
+
+  Future<void> _refreshOfflineServerData() async {
+    if (!offlineMode) return;
+    final healthy = await MerchantOfflineServerService.health();
+    if (_isOnline && healthy) {
+      final now = DateTime.now();
+      if (_lastOfflineSyncAt == null ||
+          now.difference(_lastOfflineSyncAt!) > const Duration(seconds: 20)) {
+        _lastOfflineSyncAt = now;
+        await MerchantOfflineServerService.syncNow();
+      }
+    }
+    final wallet = await MerchantOfflineServerService.getOfflineWallet(merchantUsername);
+    final txs = await MerchantOfflineServerService.getOfflineTransactions(merchantId: merchantUsername);
+
+    if (mounted) {
+      setState(() {
+        _offlineServerHealthy = healthy;
+        _offlineWallet = wallet;
+        _offlineTxCount = txs.length;
+      });
     }
 
-    final hotspotReady = _hasLocalNetworkLink(ip) &&
-        LocalPaymentServer.isRunning;
-    if (mounted) setState(() => _clientHotspotReachable = hotspotReady);
+    for (final tx in txs) {
+      final txId = tx["tx_id"]?.toString();
+      if (txId == null || txId.isEmpty || _seenOfflineTxIds.contains(txId)) continue;
+      _seenOfflineTxIds.add(txId);
+      _onOfflinePaymentReceived({
+        "amount": tx["amount"],
+        "token": tx["token"],
+      });
+      break;
+    }
   }
 
   Future<void> toggleOfflineMode(bool value) async {
-    _offlineIpRefreshTimer?.cancel();
-    _offlineIpRefreshTimer = null;
     setState(() => offlineMode = value);
     if (value) {
-      final err = await LocalPaymentServer.start();
-      if (err != null) {
-        setState(() => offlineMode = false);
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text("Could not start offline server: $err")),
-          );
-        }
-        return;
-      }
-      // Get IP: retry with delays (adapter often not ready immediately when connecting to hotspot)
-      String? ip = await getLocalIpAddress();
-      for (final delayMs in [400, 800, 1200]) {
-        if (ip != null) break;
-        await Future.delayed(Duration(milliseconds: delayMs));
-        ip = await getLocalIpAddress();
-      }
       if (mounted) {
-        setState(() {
-          localIp = ip;
-          _clientHotspotReachable =
-              _hasLocalNetworkLink(ip) && ip != null && ip.isNotEmpty;
-        });
-        if (ip != null && ip.isNotEmpty) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("Offline mode ready. IP detected.")),
-          );
-        }
-        // Refresh IP/network state periodically for hotspot readiness.
-        _offlineIpRefreshTimer = Timer.periodic(
-          const Duration(seconds: 3),
-          (_) => _refreshOfflineIp(),
-        );
+        setState(() => _clientHotspotReachable = _hasLocalNetworkLink());
       }
-      await _refreshOfflineIp();
+      _startOfflineServerPolling();
     } else {
-      LocalPaymentServer.stop();
+      _stopOfflineServerPolling();
       setState(() {
-        localIp = null;
         _clientHotspotReachable = false;
       });
       if (qrData != null) {
@@ -321,7 +334,7 @@ class _MerchantHomeState extends State<MerchantHome> {
   }
 
   Widget _buildConnectivityStatus() {
-    final hasWlan = _hasLocalNetworkLink(localIp);
+    final hasWlan = _hasLocalNetworkLink();
     return Wrap(
       spacing: 12,
       runSpacing: 4,
@@ -355,6 +368,20 @@ class _MerchantHomeState extends State<MerchantHome> {
             Text(_isOnline ? "Internet: Available" : "Internet: Offline", style: TextStyle(fontSize: 11, color: _isOnline ? Colors.green : Colors.orange)),
           ],
         ),
+        if (offlineMode)
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(_offlineServerHealthy ? Icons.dns : Icons.dns_outlined, size: 14, color: _offlineServerHealthy ? Colors.green : Colors.orange),
+              const SizedBox(width: 4),
+              Text(
+                _offlineServerHealthy
+                    ? "Offline server: Connected ($_offlineTxCount tx)"
+                    : "Offline server: Not reachable (localhost:3001)",
+                style: TextStyle(fontSize: 11, color: _offlineServerHealthy ? Colors.green : Colors.orange),
+              ),
+            ],
+          ),
       ],
     );
   }
@@ -383,34 +410,22 @@ class _MerchantHomeState extends State<MerchantHome> {
       "crypto": crypto,
       "amount": cryptoAmount
     };
-    if (offlineMode && localIp != null && LocalPaymentServer.isRunning) {
-      payload["localIp"] = localIp;
-      payload["port"] = LocalPaymentServer.port ?? LocalPaymentServer.defaultPort;
-    } else if (offlineMode) {
-      // Fallback: client can auto-discover merchant local server on same hotspot.
-      payload["port"] = LocalPaymentServer.port ?? LocalPaymentServer.defaultPort;
+    if (offlineMode) {
+      // Merchant web offline mode uses local offline server on 3001.
+      payload["port"] = 3001;
+      payload["mode"] = "offline_server";
     }
 
     qrData = jsonEncode(payload);
 
     setState(() {});
-    if (offlineMode && (localIp == null || localIp!.isEmpty) && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("QR generated without IP. Client will auto-discover merchant on same hotspot."),
-          duration: Duration(seconds: 3),
-        ),
-      );
-    }
   }
 
   @override
   void dispose() {
     watcher?.cancel();
-    _offlineIpRefreshTimer?.cancel();
     _internetCheckTimer?.cancel();
-    if (offlineMode) LocalPaymentServer.stop();
-    LocalPaymentServer.onPaymentReceived = null;
+    _offlineServerPollTimer?.cancel();
     super.dispose();
   }
 
@@ -537,48 +552,42 @@ class _MerchantHomeState extends State<MerchantHome> {
                                     children: [
                                       Expanded(
                                         child: Text(
-                                          localIp != null && localIp!.isNotEmpty
-                                              ? "Local: $localIp:${LocalPaymentServer.port ?? ""} (ready)"
-                                              : "Hotspot mode active. IP not shown yet, but offline QR can still work on same network.",
-                                          style: TextStyle(fontSize: 12, color: localIp != null ? Colors.green : Colors.orange),
+                                          _offlineServerHealthy
+                                              ? "Offline server ready at localhost:3001."
+                                              : "Offline mode active. Start offline-server.js on merchant system (localhost:3001).",
+                                          style: TextStyle(fontSize: 12, color: _offlineServerHealthy ? Colors.green : Colors.orange),
                                         ),
                                       ),
                                       TextButton.icon(
                                         onPressed: () async {
-                                          setState(() {
-                                            localIp = null;
-                                            _clientHotspotReachable = false;
-                                          });
-                                          String? ip = await getLocalIpAddress();
-                                          for (final delayMs in [300, 600, 1000]) {
-                                            if (ip != null) break;
-                                            await Future.delayed(Duration(milliseconds: delayMs));
-                                            ip = await getLocalIpAddress();
-                                          }
-                                          if (mounted) {
-                                            setState(() => localIp = ip);
-                                          }
-                                          await _refreshOfflineIp();
+                                          await _refreshOfflineServerData();
                                           if (mounted) {
                                             ScaffoldMessenger.of(context).showSnackBar(
                                               SnackBar(
                                                 content: Text(
-                                                  ip == null
-                                                      ? "Could not detect IP. Ensure you're connected to the customer's hotspot."
-                                                      : _clientHotspotReachable
-                                                          ? "Connected to customer hotspot. Ready for offline coins."
-                                                          : "IP refreshed: $ip. Still waiting for hotspot/local network.",
+                                                  _offlineServerHealthy
+                                                      ? "Offline server reachable."
+                                                      : "Offline server not reachable. Ensure localhost:3001 is running.",
                                                 ),
-                                                duration: Duration(seconds: ip != null ? 2 : 4),
+                                                duration: const Duration(seconds: 3),
                                               ),
                                             );
                                           }
                                         },
                                         icon: const Icon(Icons.refresh, size: 18),
-                                        label: const Text("Refresh IP"),
+                                        label: const Text("Refresh Offline Server"),
                                       ),
                                     ],
                                   ),
+                                  if (_offlineWallet != null) ...[
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      "Offline wallet - BTC: ${((_offlineWallet!["balances"] as Map<String, dynamic>?)?["BTC"] ?? 0)} | "
+                                      "ETH: ${((_offlineWallet!["balances"] as Map<String, dynamic>?)?["ETH"] ?? 0)} | "
+                                      "USDT: ${((_offlineWallet!["balances"] as Map<String, dynamic>?)?["USDT"] ?? 0)}",
+                                      style: const TextStyle(fontSize: 11, color: Colors.grey),
+                                    ),
+                                  ],
                                 ],
                                 const SizedBox(height: 12),
 
