@@ -334,42 +334,47 @@ class _TransactionHistoryState extends State<TransactionHistory> {
           ),
         ],
       ),
-      body: loading
-            ? const Center(child: CircularProgressIndicator())
-            : !_hasLoadedOnce && transactions.isEmpty
-                ? Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(24),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.history, size: 48, color: Colors.grey.shade400),
-                          const SizedBox(height: 16),
-                          Text(
-                            "Transaction history is not loaded on startup.",
-                            textAlign: TextAlign.center,
-                            style: TextStyle(fontSize: 15, color: Colors.grey.shade700),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            "Tap Reload to load transactions",
-                            textAlign: TextAlign.center,
-                            style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
-                          ),
-                        ],
-                      ),
-                    ),
-                  )
-                : errorMessage != null && transactions.isEmpty
-                    ? Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(24),
-                          child: Text(errorMessage!, textAlign: TextAlign.center, style: const TextStyle(fontSize: 15)),
-                        ),
-                      )
-                    : transactions.isEmpty
-                        ? const Center(child: Text("No transactions yet"))
-                    : CustomScrollView(
+      body: _buildBody(),
+    );
+  }
+
+  Widget _buildBody() {
+    if (loading) return const Center(child: CircularProgressIndicator());
+    if (!_hasLoadedOnce && transactions.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.history, size: 48, color: Colors.grey.shade400),
+              const SizedBox(height: 16),
+              Text(
+                "Transaction history is not loaded on startup.",
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 15, color: Colors.grey.shade700),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                "Tap Reload to load transactions",
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    if (errorMessage != null && transactions.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(errorMessage!, textAlign: TextAlign.center, style: const TextStyle(fontSize: 15)),
+        ),
+      );
+    }
+    if (transactions.isEmpty) return const Center(child: Text("No transactions yet"));
+    return CustomScrollView(
                         key: const PageStorageKey<String>("merchant_tx_list"),
                         slivers: [
                           SliverToBoxAdapter(
@@ -489,8 +494,7 @@ class _TransactionHistoryState extends State<TransactionHistory> {
                             ),
                           ),
                         ],
-                      ),
-    );
+                      );
   }
 
   Widget _legendChip(String label, Color color) {

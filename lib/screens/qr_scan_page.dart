@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
 import 'payment_preview.dart';
 
 class QRScanPage extends StatefulWidget {
@@ -11,7 +10,7 @@ class QRScanPage extends StatefulWidget {
 }
 
 class _QRScanPageState extends State<QRScanPage> {
-  final MobileScannerController controller = MobileScannerController();
+  final TextEditingController _controller = TextEditingController();
   bool _busy = false;
 
   void _handle(String raw) {
@@ -19,13 +18,10 @@ class _QRScanPageState extends State<QRScanPage> {
     _busy = true;
 
     try {
-      /// JSON QR
       if (raw.startsWith('{')) {
         final data = jsonDecode(raw);
-
         final crypto = data['crypto'] ?? "";
         final merchant = data['merchant'] ?? "";
-
         double amount = 0;
         if (data['amount'] != null) {
           amount = (data['amount'] as num).toDouble();
@@ -35,22 +31,20 @@ class _QRScanPageState extends State<QRScanPage> {
           context,
           MaterialPageRoute(
             builder: (_) => PaymentPreview(
-              crypto: crypto,
+              crypto: crypto.isNotEmpty ? crypto : "ETH",
               amount: amount,
-              address: merchant, // merchant becomes receiver
+              address: merchant.isNotEmpty ? merchant : "merchant",
             ),
           ),
         );
         return;
       }
 
-      /// Ethereum
       if (raw.startsWith("ethereum:")) {
         final uri = Uri.parse(raw);
         final address = uri.path;
         final wei = uri.queryParameters["value"] ?? "0";
         final eth = double.parse(wei) / 1e18;
-
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
@@ -64,13 +58,10 @@ class _QRScanPageState extends State<QRScanPage> {
         return;
       }
 
-      /// Bitcoin
       if (raw.startsWith("bitcoin:")) {
         final uri = Uri.parse(raw);
         final address = uri.path;
-        final btc =
-            double.tryParse(uri.queryParameters["amount"] ?? "0") ?? 0;
-
+        final btc = double.tryParse(uri.queryParameters["amount"] ?? "0") ?? 0;
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
@@ -87,27 +78,62 @@ class _QRScanPageState extends State<QRScanPage> {
       throw Exception("Unsupported QR");
     } catch (e) {
       _busy = false;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Invalid QR")),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Invalid QR or data")),
+        );
+      }
     }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text("Scan QR")),
-      body: MobileScanner(
-        controller: controller,
-        onDetect: (capture) {
-          if (capture.barcodes.isEmpty) return;
-
-          final code = capture.barcodes.first.rawValue;
-
-          if (code == null || code.isEmpty) return;
-
-          _handle(code);
-          }
+      body: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              "Paste QR payload or scan with device camera when available.",
+              style: TextStyle(fontSize: 14, color: Colors.grey),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _controller,
+              decoration: const InputDecoration(
+                labelText: "QR data (JSON or ethereum:/bitcoin: URI)",
+                border: OutlineInputBorder(),
+                hintText: '{"merchant":"m1","crypto":"ETH","amount":0.5}',
+              ),
+              maxLines: 3,
+            ),
+            const SizedBox(height: 24),
+            ElevatedButton.icon(
+              onPressed: _busy
+                  ? null
+                  : () {
+                      final text = _controller.text.trim();
+                      if (text.isEmpty) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text("Enter QR data")),
+                        );
+                        return;
+                      }
+                      _handle(text);
+                    },
+              icon: const Icon(Icons.check),
+              label: const Text("Continue"),
+            ),
+          ],
+        ),
       ),
     );
   }

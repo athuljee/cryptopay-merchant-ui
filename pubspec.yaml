@@ -18,8 +18,6 @@ dependencies:
   shared_preferences: ^2.2.2
   connectivity_plus: ^6.0.3
   network_info_plus: ^4.0.2
-  local_auth: ^2.1.4
-  mobile_scanner: ^5.0.0
 
 dev_dependencies:
   flutter_test:
