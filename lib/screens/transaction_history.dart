@@ -282,13 +282,36 @@ class _TransactionHistoryState extends State<TransactionHistory> {
     } catch (e) {
       if (kDebugMode) debugPrint("TransactionHistory loadHistory: $e");
       if (mounted) {
+        final merged = <String, Map<String, dynamic>>{};
+        try {
+          final offline = await MerchantOfflineServerService.getOfflineTransactions(
+            merchantId: merchantUsername.isEmpty ? null : merchantUsername,
+          );
+          for (final raw in offline) {
+            final tx = _normalizeOffline(raw);
+            final txId = tx["tx_id"].toString();
+            final old = merged[txId];
+            if (old == null || _rank(tx) >= _rank(old)) merged[txId] = tx;
+          }
+        } catch (_) {}
         final pending = await LocalStorage.getPendingOfflineTxs();
-        final txs = pending.map(_normalizeOffline).toList();
+        for (final raw in pending) {
+          final tx = _normalizeOffline(raw);
+          final txId = tx["tx_id"].toString();
+          final old = merged[txId];
+          if (old == null || _rank(tx) >= _rank(old)) merged[txId] = tx;
+        }
+        final txs = merged.values.toList()
+          ..sort((a, b) {
+            final ad = _parseDate(a["offline_created_at"]) ?? _parseDate(a["created_at"]) ?? DateTime.fromMillisecondsSinceEpoch(0);
+            final bd = _parseDate(b["offline_created_at"]) ?? _parseDate(b["created_at"]) ?? DateTime.fromMillisecondsSinceEpoch(0);
+            return bd.compareTo(ad);
+          });
         setState(() {
           transactions = txs;
           loading = false;
           _hasLoadedOnce = true;
-          errorMessage = txs.isEmpty ? "No internet. No local transactions available." : "No internet. Showing offline transactions.";
+          errorMessage = txs.isEmpty ? "No transactions. Pull to refresh when online." : null;
         });
       }
     }

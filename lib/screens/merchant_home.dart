@@ -330,6 +330,8 @@ class _MerchantHomeState extends State<MerchantHome> {
       _onOfflinePaymentReceived({
         "amount": tx["amount"],
         "token": tx["token"],
+        "from": tx["from_user_id"],
+        "from_user_id": tx["from_user_id"],
       });
       break;
     }
@@ -341,6 +343,18 @@ class _MerchantHomeState extends State<MerchantHome> {
       if (mounted) {
         setState(() => _clientHotspotReachable = _hasLocalNetworkLink());
       }
+      // Seed seen IDs with current offline server txs so we don't show old transactions as "new"
+      try {
+        final existing = await MerchantOfflineServerService.getOfflineTransactions(merchantId: merchantUsername);
+        if (mounted) {
+          setState(() {
+            for (final tx in existing) {
+              final id = tx["tx_id"]?.toString() ?? tx["txId"]?.toString();
+              if (id != null && id.isNotEmpty) _seenOfflineTxIds.add(id);
+            }
+          });
+        }
+      } catch (_) {}
       _startOfflineServerPolling();
     } else {
       _stopOfflineServerPolling();
