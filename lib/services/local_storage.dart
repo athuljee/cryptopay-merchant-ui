@@ -9,6 +9,11 @@ class OfflineTxKeys {
   static const token = "token";
   static const timestamp = "timestamp";
   static const status = "status";
+  static const syncStatus = "sync_status";
+  static const isOfflinePayment = "is_offline_payment";
+  static const offlineCreatedAt = "offline_created_at";
+  static const offlineReceivedAt = "offline_received_at";
+  static const blockchainSyncedAt = "blockchain_synced_at";
 }
 
 class LocalStorage {
@@ -109,6 +114,10 @@ class LocalStorage {
     for (int i = 0; i < list.length; i++) {
       if (list[i][OfflineTxKeys.txId] == txId) {
         list[i][OfflineTxKeys.status] = status;
+        list[i][OfflineTxKeys.syncStatus] = status == "synced" ? "synced" : status;
+        if (status == "synced") {
+          list[i][OfflineTxKeys.blockchainSyncedAt] = DateTime.now().toIso8601String();
+        }
         break;
       }
     }
