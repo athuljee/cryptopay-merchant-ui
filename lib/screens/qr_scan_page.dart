@@ -102,14 +102,14 @@ class _QRScanPageState extends State<QRScanPage> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const Text(
-              "Paste QR payload or scan with device camera when available.",
+              "Paste QR payload (JSON or ethereum:/bitcoin: URI).",
               style: TextStyle(fontSize: 14, color: Colors.grey),
             ),
             const SizedBox(height: 16),
             TextField(
               controller: _controller,
               decoration: const InputDecoration(
-                labelText: "QR data (JSON or ethereum:/bitcoin: URI)",
+                labelText: "QR data",
                 border: OutlineInputBorder(),
                 hintText: '{"merchant":"m1","crypto":"ETH","amount":0.5}',
               ),
